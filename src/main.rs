@@ -18,7 +18,7 @@ use js::{JSCLASS_RESERVED_SLOTS_MASK,JSCLASS_RESERVED_SLOTS_SHIFT,JSCLASS_GLOBAL
 use js::jsapi::JS_GlobalObjectTraceHook;
 use js::jsapi::{CallArgs,CompartmentOptions,OnNewGlobalHookOption,Rooted,Value};
 use js::jsapi::{JS_DefineFunction,JS_Init,JS_NewGlobalObject, JS_InitStandardClasses,JS_EncodeStringToUTF8, JS_ReportPendingException, JS_BufferIsCompilableUnit};
-use js::jsapi::{JSAutoCompartment,JSContext,JSClass};
+use js::jsapi::{JSAutoCompartment,JSAutoRequest,JSContext,JSClass};
 use js::jsapi::{JS_SetGCParameter, JSGCParamKey, JSGCMode};
 // use jsapi::{Rooted, RootedValue, Handle, MutableHandle};
 // use jsapi::{MutableHandleValue, HandleValue, HandleObject};
@@ -65,6 +65,7 @@ fn main() {
 
     let h_option = OnNewGlobalHookOption::FireOnNewGlobalHook;
     let c_option = CompartmentOptions::default();
+    let _ar = JSAutoRequest::new(cx);
     let global = unsafe { JS_NewGlobalObject(cx, CLASS, ptr::null_mut(), h_option, &c_option) };
     let global_root = Rooted::new(cx, global);
     let global = global_root.handle();
