@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<projectDescription>
+	<name>mozjs-shell</name>
+	<comment></comment>
+	<projects>
+	</projects>
+	<buildSpec>
+		<buildCommand>
+			<name>com.github.rustdt.ide.core.Builder</name>
+			<arguments>
+			</arguments>
+		</buildCommand>
+	</buildSpec>
+	<natures>
+		<nature>com.github.rustdt.ide.core.nature</nature>
+	</natures>
+	<linkedResources>
+		<link>
+			<name>rust-mozjs</name>
+			<type>2</type>
+			<location>/Users/till/.cargo/git/checkouts/rust-mozjs-ebb4917e843c0a11/master/src</location>
+		</link>
+	</linkedResources>
+</projectDescription>

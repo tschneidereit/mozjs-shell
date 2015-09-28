@@ -1,0 +1,13 @@
+[package]
+name = "rust-mozjs-shell"
+version = "0.0.1"
+authors = ["Till Schneidereit <till@tillschneidereit.net>"]
+
+[dependencies.js]
+path = "../mozjs/"
+version = "*"
+
+[dependencies]
+libc = "0.1"
+argparse = "0.2"
+linenoise = "*"
