@@ -4,8 +4,8 @@ version = "0.0.1"
 authors = ["Till Schneidereit <till@tillschneidereit.net>"]
 
 [dependencies.js]
-path = "../mozjs/"
-version = "*"
+git = "https://github.com/tschneidereit/rust-mozjs"
+rev = "0eb8fff7c32843eef0d6a7684a1d66911c46ee2f"
 
 [dependencies]
 libc = "0.1"
