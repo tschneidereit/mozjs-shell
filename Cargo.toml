@@ -13,4 +13,4 @@ debugmozjs = ['js/debugmozjs']
 [dependencies]
 libc = "0.1"
 argparse = "0.2"
-linenoise = "*"
+linenoise = {git = "https://github.com/cmr/linenoise-rs"}
