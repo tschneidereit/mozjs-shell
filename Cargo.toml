@@ -4,8 +4,7 @@ version = "0.0.1"
 authors = ["Till Schneidereit <till@tillschneidereit.net>"]
 
 [dependencies.js]
-git = "https://github.com/tschneidereit/rust-mozjs"
-rev = "9dbe805b9f963b59159a2347a13d1824835f47f0"
+git = "https://github.com/servo/rust-mozjs"
 
 [features]
 debugmozjs = ['js/debugmozjs']
