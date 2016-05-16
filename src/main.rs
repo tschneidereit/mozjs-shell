@@ -128,10 +128,10 @@ fn main() {
 
     unsafe {
         JS_InitStandardClasses(cx, global);
-        JS_DefineFunction(cx, global, b"print\0".as_ptr() as *const libc::c_char, Some(print), 1, 0);
-        JS_DefineFunction(cx, global, b"load\0".as_ptr() as *const libc::c_char, Some(load), 1, 0);
-        JS_DefineFunction(cx, global, b"read\0".as_ptr() as *const libc::c_char, Some(read), 1, 0);
-        JS_DefineFunction(cx, global, b"readFile\0".as_ptr() as *const libc::c_char, Some(read), 1, 0);
+        JS_DefineFunction(cx, global, b"print\0".as_ptr() as *const _, Some(print), 1, 0);
+        JS_DefineFunction(cx, global, b"load\0".as_ptr() as *const _, Some(load), 1, 0);
+        JS_DefineFunction(cx, global, b"read\0".as_ptr() as *const _, Some(read), 1, 0);
+        JS_DefineFunction(cx, global, b"readFile\0".as_ptr() as *const _, Some(read), 1, 0);
     }
 
     if js_options.script != "" {
