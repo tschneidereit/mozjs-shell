@@ -20,7 +20,7 @@ use js::{JSCLASS_RESERVED_SLOTS_MASK,JSCLASS_GLOBAL_SLOT_COUNT,JSCLASS_IS_GLOBAL
 use js::jsapi::{CurrentGlobalOrNull, JSCLASS_RESERVED_SLOTS_SHIFT,JS_GlobalObjectTraceHook};
 use js::jsapi::{CallArgs,CompartmentOptions,OnNewGlobalHookOption,Rooted,Value};
 use js::jsapi::{JS_DefineFunction,JS_Init,JS_NewGlobalObject, JS_InitStandardClasses,JS_EncodeStringToUTF8, JS_ReportPendingException, JS_BufferIsCompilableUnit};
-use js::jsapi::{JSAutoCompartment,JSAutoRequest,JSContext,JSClass};
+use js::jsapi::{JSAutoCompartment, JSContext, JSClass};
 use js::jsapi::{JS_SetGCParameter, JSGCParamKey, JSGCMode};
 // use jsapi::{Rooted, RootedValue, Handle, MutableHandle};
 // use jsapi::{MutableHandleValue, HandleValue, HandleObject};
@@ -29,6 +29,7 @@ use js::jsapi::{JS_SetParallelParsingEnabled, JS_SetOffthreadIonCompilationEnabl
 use js::jsapi::{JS_SetGlobalJitCompilerOption};
 use js::jsval::UndefinedValue;
 use js::rust::Runtime;
+use js::conversions::ToJSValConvertible;
 
 thread_local!(pub static RUNTIME: RefCell<Option<Runtime>> = RefCell::new(None));
 
@@ -92,7 +93,6 @@ fn main() {
 
     let h_option = OnNewGlobalHookOption::FireOnNewGlobalHook;
     let c_option = CompartmentOptions::default();
-    let _ar = JSAutoRequest::new(cx);
     let global = unsafe { JS_NewGlobalObject(cx, CLASS, ptr::null_mut(), h_option, &c_option) };
     let global_root = Rooted::new(cx, global);
     let global = global_root.handle();
@@ -128,8 +128,10 @@ fn main() {
 
     unsafe {
         JS_InitStandardClasses(cx, global);
-        JS_DefineFunction(cx, global, b"print\0".as_ptr() as *const libc::c_char, Some(print), 1, 0);
-        JS_DefineFunction(cx, global, b"load\0".as_ptr() as *const libc::c_char, Some(load), 1, 0);
+        JS_DefineFunction(cx, global, b"print\0".as_ptr() as *const _, Some(print), 1, 0);
+        JS_DefineFunction(cx, global, b"load\0".as_ptr() as *const _, Some(load), 1, 0);
+        JS_DefineFunction(cx, global, b"read\0".as_ptr() as *const _, Some(read), 1, 0);
+        JS_DefineFunction(cx, global, b"readFile\0".as_ptr() as *const _, Some(read), 1, 0);
     }
 
     if js_options.script != "" {
@@ -178,7 +180,7 @@ fn run_read_eval_print_loop(runtime: &Runtime, global: HandleObject) {
 }
 
 fn run_script(runtime: &Runtime, global: HandleObject, filename: &String) -> Result<i32, &'static str> {
-    let mut source = "".to_string();
+    let mut source = String::new();
     {
         let mut file = match File::open(&filename) {
             Err(_) => return Err("Error opening source file"),
@@ -195,7 +197,7 @@ fn run_script(runtime: &Runtime, global: HandleObject, filename: &String) -> Res
     }
 }
 
-fn parse_args<'a>() -> JSOptions {
+fn parse_args() -> JSOptions {
     let mut options = JSOptions {
         interactive: false,
         disable_baseline: false,
@@ -342,6 +344,43 @@ unsafe extern "C" fn load(cx: *mut JSContext, argc: u32, vp: *mut Value) -> bool
     }
 
     args.rval().set(UndefinedValue());
+    return true;
+}
+
+unsafe extern "C" fn read(cx: *mut JSContext, argc: u32, vp: *mut Value) -> bool {
+    if argc < 1 {
+        return false;
+    }
+
+    let args = CallArgs::from_vp(vp, argc);
+    let val = args.get(0);
+    let s = js::rust::ToString(cx, val);
+    if s.is_null() {
+        // TODO: report error
+        return false;
+    }
+
+    let mut filename = env::current_dir().unwrap();
+    let path_root = Rooted::new(cx, s);
+    let path = JS_EncodeStringToUTF8(cx, path_root.handle());
+    let path = CStr::from_ptr(path);
+    filename.push(str::from_utf8(path.to_bytes()).unwrap());
+
+    let mut file = match File::open(&filename) {
+        Ok(file) => file,
+        _ => {
+            // TODO: report error
+            return false;
+        }
+    };
+
+    let mut source = String::new();
+    if let Err(_) = file.read_to_string(&mut source) {
+        // TODO: report error
+        return false;
+    }
+
+    source.to_jsval(cx, args.rval());
     return true;
 }
 
