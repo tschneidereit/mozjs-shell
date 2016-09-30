@@ -2,9 +2,9 @@
 name = "rust-mozjs-shell"
 version = "0.0.1"
 authors = ["Till Schneidereit <till@tillschneidereit.net>"]
+license = "MPL-2.0"
+publish = false
 
-[dependencies.js]
-git = "https://github.com/servo/rust-mozjs"
 
 [features]
 debugmozjs = ['js/debugmozjs']
@@ -13,3 +13,4 @@ debugmozjs = ['js/debugmozjs']
 libc = "0.1"
 argparse = "0.2"
 linenoise = {git = "https://github.com/cmr/linenoise-rs"}
+js = {git = "https://github.com/servo/rust-mozjs", features = ["promises"]}

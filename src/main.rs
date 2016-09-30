@@ -3,6 +3,7 @@
  * You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 extern crate argparse;
+#[macro_use]
 extern crate js;
 extern crate libc;
 extern crate linenoise;
@@ -17,38 +18,28 @@ use std::str;
 
 use argparse::{ArgumentParser, StoreTrue, Store};
 use js::{JSCLASS_RESERVED_SLOTS_MASK,JSCLASS_GLOBAL_SLOT_COUNT,JSCLASS_IS_GLOBAL};
-use js::jsapi::{CurrentGlobalOrNull, JSCLASS_RESERVED_SLOTS_SHIFT,JS_GlobalObjectTraceHook};
-use js::jsapi::{CallArgs,CompartmentOptions,OnNewGlobalHookOption,Rooted,Value};
-use js::jsapi::{JS_DefineFunction,JS_Init,JS_NewGlobalObject, JS_InitStandardClasses,JS_EncodeStringToUTF8, JS_ReportPendingException, JS_BufferIsCompilableUnit};
+use js::jsapi::{CurrentGlobalOrNull, JSCLASS_RESERVED_SLOTS_SHIFT};
+use js::jsapi::{CallArgs,CompartmentOptions,OnNewGlobalHookOption,Value};
+use js::jsapi::{JS_DefineFunction,JS_Init,JS_NewGlobalObject, JS_InitStandardClasses,JS_EncodeStringToUTF8, JS_BufferIsCompilableUnit};
 use js::jsapi::{JSAutoCompartment, JSContext, JSClass};
-use js::jsapi::{JS_SetGCParameter, JSGCParamKey, JSGCMode};
-// use jsapi::{Rooted, RootedValue, Handle, MutableHandle};
-// use jsapi::{MutableHandleValue, HandleValue, HandleObject};
-use js::jsapi::{RootedValue, HandleObject, HandleValue, RuntimeOptionsRef};
+use js::jsapi::{JS_IsExceptionPending, JS_GetPendingException, JS_ClearPendingException, JS_ErrorFromException};
+use js::jsapi::{JS_SetGCParameter, JSGCParamKey, JSGCMode, DisableIncrementalGC};
+use js::jsapi::{HandleObject, HandleValue, RuntimeOptionsRef};
 use js::jsapi::{JS_SetParallelParsingEnabled, JS_SetOffthreadIonCompilationEnabled, JSJitCompilerOption};
-use js::jsapi::{JS_SetGlobalJitCompilerOption};
+use js::jsapi::JS_SetGlobalJitCompilerOption;
 use js::jsval::UndefinedValue;
 use js::rust::Runtime;
 use js::conversions::ToJSValConvertible;
+use libc::c_uint;
+use std::slice::from_raw_parts;
 
 thread_local!(pub static RUNTIME: RefCell<Option<Runtime>> = RefCell::new(None));
 
 static CLASS: &'static JSClass = &JSClass {
     name: b"test\0" as *const u8 as *const libc::c_char,
     flags: JSCLASS_IS_GLOBAL | ((JSCLASS_GLOBAL_SLOT_COUNT & JSCLASS_RESERVED_SLOTS_MASK) << JSCLASS_RESERVED_SLOTS_SHIFT),
-    addProperty: None,
-    delProperty: None,
-    getProperty: None,
-    setProperty: None,
-    enumerate: None,
-    resolve: None,
-    mayResolve: None,
-    finalize: None,
-    call: None,
-    hasInstance: None,
-    construct: None,
-    trace: Some(JS_GlobalObjectTraceHook),
-    reserved: [0 as *mut _; 23]
+    cOps: 0 as *const _,
+    reserved: [0 as *mut _; 3]
 };
 
 struct JSOptions {
@@ -67,9 +58,9 @@ struct JSOptions {
     enable_dump_stack_on_debugee_would_run: bool,
     enable_werror: bool,
     enable_strict: bool,
+    enable_incremental: bool,
     disable_shared_memory: bool,
     disable_gc_per_compartment: bool,
-    disable_incremental: bool,
     disable_compacting: bool,
     disable_dynamic_work_slice: bool,
     disable_dynamic_mark_slice: bool,
@@ -81,20 +72,16 @@ struct JSOptions {
 fn main() {
     let js_options = parse_args();
 
-    unsafe {
-        JS_Init();
-    }
+    unsafe { JS_Init(); }
 
-    RUNTIME.with(|ref r| {
-        *r.borrow_mut() = Some(unsafe { Runtime::new() });
-    });
-    let cx = RUNTIME.with(|ref r| r.borrow().as_ref().unwrap().cx());
-    let rt = RUNTIME.with(|ref r| r.borrow().as_ref().unwrap().rt());
+    let runtime = Runtime::new();
+    let rt = runtime.rt();
+    let cx = runtime.cx();
 
     let h_option = OnNewGlobalHookOption::FireOnNewGlobalHook;
     let c_option = CompartmentOptions::default();
     let global = unsafe { JS_NewGlobalObject(cx, CLASS, ptr::null_mut(), h_option, &c_option) };
-    let global_root = Rooted::new(cx, global);
+    rooted!(in(cx) let global_root = global);
     let global = global_root.handle();
     let _ac = JSAutoCompartment::new(cx, global.get());
 
@@ -104,30 +91,34 @@ fn main() {
     rt_opts.set_asmJS_(!js_options.disable_asmjs);
     rt_opts.set_extraWarnings_(js_options.enable_strict);
     rt_opts.set_nativeRegExp_(!js_options.disable_native_regexp);
-    unsafe { JS_SetParallelParsingEnabled(rt, !js_options.disable_parallel_parsing); }
-    unsafe { JS_SetOffthreadIonCompilationEnabled(rt, !js_options.disable_offthread_compilation); }
-    unsafe { JS_SetGlobalJitCompilerOption(rt, JSJitCompilerOption::JSJITCOMPILER_BASELINE_WARMUP_TRIGGER,
-                                           if js_options.enable_baseline_unsafe_eager_compilation { 0i32 } else { -1i32 } as u32); }
-    unsafe { JS_SetGlobalJitCompilerOption(rt, JSJitCompilerOption::JSJITCOMPILER_ION_WARMUP_TRIGGER,
-                                           if js_options.enable_ion_unsafe_eager_compilation { 0i32 } else { -1i32 } as u32); }
     rt_opts.set_werror_(js_options.enable_werror);
-    let mode = if !js_options.disable_incremental {
-        println!("incremental");
+
+    let gc_mode = if js_options.enable_incremental {
         JSGCMode::JSGC_MODE_INCREMENTAL
-    } else if js_options.disable_gc_per_compartment {
-        println!("compartment");
+    } else if !js_options.disable_gc_per_compartment {
         JSGCMode::JSGC_MODE_COMPARTMENT
     } else {
-        println!("global");
         JSGCMode::JSGC_MODE_GLOBAL
     };
-    unsafe { JS_SetGCParameter(rt, JSGCParamKey::JSGC_MODE, mode as u32); }
-    unsafe { JS_SetGCParameter(rt, JSGCParamKey::JSGC_COMPACTING_ENABLED, !js_options.disable_compacting as u32); }
-    unsafe { JS_SetGCParameter(rt, JSGCParamKey::JSGC_DYNAMIC_MARK_SLICE, !js_options.disable_dynamic_mark_slice as u32); }
-    unsafe { JS_SetGCParameter(rt, JSGCParamKey::JSGC_DYNAMIC_HEAP_GROWTH, !js_options.disable_dynamic_heap_growth as u32); }
 
     unsafe {
+        // Pre barriers aren't working correctly at the moment
+        DisableIncrementalGC(runtime.rt());
+
+        JS_SetGCParameter(rt, JSGCParamKey::JSGC_MODE, gc_mode as u32);
+        JS_SetGCParameter(rt, JSGCParamKey::JSGC_COMPACTING_ENABLED, !js_options.disable_compacting as u32);
+        JS_SetGCParameter(rt, JSGCParamKey::JSGC_DYNAMIC_MARK_SLICE, !js_options.disable_dynamic_mark_slice as u32);
+        JS_SetGCParameter(rt, JSGCParamKey::JSGC_DYNAMIC_HEAP_GROWTH, !js_options.disable_dynamic_heap_growth as u32);
+
+        JS_SetParallelParsingEnabled(rt, !js_options.disable_parallel_parsing);
+        JS_SetOffthreadIonCompilationEnabled(rt, !js_options.disable_offthread_compilation);
+        JS_SetGlobalJitCompilerOption(rt, JSJitCompilerOption::JSJITCOMPILER_BASELINE_WARMUP_TRIGGER,
+                                      if js_options.enable_baseline_unsafe_eager_compilation { 0i32 } else { -1i32 } as u32);
+        JS_SetGlobalJitCompilerOption(rt, JSJitCompilerOption::JSJITCOMPILER_ION_WARMUP_TRIGGER,
+                                      if js_options.enable_ion_unsafe_eager_compilation { 0i32 } else { -1i32 } as u32);
+
         JS_InitStandardClasses(cx, global);
+
         JS_DefineFunction(cx, global, b"print\0".as_ptr() as *const _, Some(print), 1, 0);
         JS_DefineFunction(cx, global, b"load\0".as_ptr() as *const _, Some(load), 1, 0);
         JS_DefineFunction(cx, global, b"read\0".as_ptr() as *const _, Some(read), 1, 0);
@@ -135,14 +126,11 @@ fn main() {
     }
 
     if js_options.script != "" {
-        RUNTIME.with(|ref r| {
-            let _ = run_script(r.borrow().as_ref().unwrap(), global, &js_options.script);
-        });
+        let _ = run_script(&runtime, global, &js_options.script);
     }
+
     if js_options.script == "" || js_options.interactive {
-        RUNTIME.with(|ref r| {
-            run_read_eval_print_loop(r.borrow().as_ref().unwrap(), global);
-        });
+        run_read_eval_print_loop(&runtime, global);
     }
 }
 
@@ -169,9 +157,11 @@ fn run_read_eval_print_loop(runtime: &Runtime, global: HandleObject) {
                 }
             }
         }
-        let mut rval = RootedValue::new(runtime.cx(), UndefinedValue());
+
+        let _are = AutoReportException { cx: runtime.cx() };
+        rooted!(in(runtime.cx()) let mut rval = UndefinedValue());
         match runtime.evaluate_script(global, &buffer, "typein", start_line, rval.handle_mut()) {
-            Err(_) => unsafe { JS_ReportPendingException(runtime.cx()); },
+            Err(_) => {},
             _ => if !rval.handle().is_undefined() {
                 println!("{}", fmt_js_value(runtime.cx(), rval.handle()))
             }
@@ -190,9 +180,11 @@ fn run_script(runtime: &Runtime, global: HandleObject, filename: &String) -> Res
             return Err("Error reading from source file");
         }
     }
-    let mut rval = RootedValue::new(runtime.cx(), UndefinedValue());
+
+    let _are = AutoReportException { cx: runtime.cx() };
+    rooted!(in(runtime.cx()) let mut rval = UndefinedValue());
     match runtime.evaluate_script(global, &source, filename, 1, rval.handle_mut()) {
-        Err(_) => unsafe { JS_ReportPendingException(runtime.cx()); Err("Uncaught exception during script execution") },
+        Err(_) => Err("Error executing script"),
         _ => Ok(1)
     }
 }
@@ -216,7 +208,7 @@ fn parse_args() -> JSOptions {
         enable_strict: false,
         disable_shared_memory: false,
         disable_gc_per_compartment: false,
-        disable_incremental: false,
+        enable_incremental: false,
         disable_compacting: false,
         disable_dynamic_work_slice: false,
         disable_dynamic_mark_slice: false,
@@ -282,9 +274,9 @@ fn parse_args() -> JSOptions {
         ap.refer(&mut options.disable_gc_per_compartment)
             .add_option(&["--no-gc-per-compartment"], StoreTrue,
                         "Disable GC per compartment");
-        ap.refer(&mut options.disable_incremental)
-            .add_option(&["--no-incremental"], StoreTrue,
-                        "Disable incremental");
+        ap.refer(&mut options.enable_incremental)
+            .add_option(&["--incremental"], StoreTrue,
+                        "Enable incremental GC");
         ap.refer(&mut options.disable_compacting)
             .add_option(&["--no-compacting"], StoreTrue,
                         "Disable compacting");
@@ -331,12 +323,11 @@ unsafe extern "C" fn load(cx: *mut JSContext, argc: u32, vp: *mut Value) -> bool
             return false;
         }
         let mut filename = env::current_dir().unwrap();
-        let path_root = Rooted::new(cx, s);
+        rooted!(in(cx) let path_root = s);
         let path = JS_EncodeStringToUTF8(cx, path_root.handle());
         let path = CStr::from_ptr(path);
         filename.push(str::from_utf8(path.to_bytes()).unwrap());
-        let global = CurrentGlobalOrNull(cx);
-        let global_root = Rooted::new(cx, global);
+        rooted!(in(cx) let global_root = CurrentGlobalOrNull(cx));
         RUNTIME.with(|ref r| {
             let _ = run_script(r.borrow().as_ref().unwrap(), global_root.handle(),
                                &filename.to_str().unwrap().to_owned());
@@ -361,7 +352,7 @@ unsafe extern "C" fn read(cx: *mut JSContext, argc: u32, vp: *mut Value) -> bool
     }
 
     let mut filename = env::current_dir().unwrap();
-    let path_root = Rooted::new(cx, s);
+    rooted!(in(cx) let path_root = s);
     let path = JS_EncodeStringToUTF8(cx, path_root.handle());
     let path = CStr::from_ptr(path);
     filename.push(str::from_utf8(path.to_bytes()).unwrap());
@@ -386,8 +377,98 @@ unsafe extern "C" fn read(cx: *mut JSContext, argc: u32, vp: *mut Value) -> bool
 
 fn fmt_js_value(cx: *mut JSContext, val: HandleValue) -> String {
     let js = unsafe { js::rust::ToString(cx, val) };
-    let message_root = Rooted::new(cx, js);
+    rooted!(in(cx) let message_root = js);
     let message = unsafe { JS_EncodeStringToUTF8(cx, message_root.handle()) };
     let message = unsafe { CStr::from_ptr(message) };
-    String::from(str::from_utf8(message.to_bytes()).unwrap())
+    String::from_utf8_lossy(message.to_bytes()).into_owned()
+}
+
+struct AutoReportException {
+    cx: *mut JSContext
+}
+
+impl Drop for AutoReportException {
+    fn drop(&mut self) {
+        unsafe { report_pending_exception(self.cx) };
+    }
+}
+
+/// A struct encapsulating information about a runtime script error.
+pub struct ErrorInfo {
+    /// The error message.
+    pub message: String,
+    /// The file name.
+    pub filename: String,
+    /// The line number.
+    pub lineno: c_uint,
+    /// The column number.
+    pub column: c_uint,
+}
+
+unsafe fn report_pending_exception(cx: *mut JSContext) {
+    if !JS_IsExceptionPending(cx) {
+        return;
+    }
+    rooted!(in(cx) let mut value = UndefinedValue());
+    if !JS_GetPendingException(cx, value.handle_mut()) {
+        JS_ClearPendingException(cx);
+        println!("Uncaught exception: JS_GetPendingException failed");
+        return;
+    }
+
+    JS_ClearPendingException(cx);
+
+    let maybe_report = if value.is_object() {
+        rooted!(in(cx) let object = value.to_object());
+        let report = JS_ErrorFromException(cx, object.handle());
+        if report.is_null() { None } else { Some(report) }
+    } else {
+        None
+    };
+
+    let error_info = match maybe_report {
+        Some(report) => {
+            let filename = {
+                let filename = (*report).filename as *const u8;
+                if !filename.is_null() {
+                    let length = (0..).find(|idx| *filename.offset(*idx) == 0).unwrap();
+                    let filename = from_raw_parts(filename, length as usize);
+                    String::from_utf8_lossy(filename).into_owned()
+                } else {
+                    "none".to_string()
+                }
+            };
+
+            let lineno = (*report).lineno;
+            let column = (*report).column;
+
+            let message = {
+                let message = (*report).ucmessage;
+                let length = (0..).find(|idx| *message.offset(*idx) == 0).unwrap();
+                let message = from_raw_parts(message, length as usize);
+                String::from_utf16_lossy(message)
+            };
+
+            ErrorInfo {
+                filename: filename,
+                message: message,
+                lineno: lineno,
+                column: column,
+            }
+        },
+        None => {
+            ErrorInfo {
+                message: format!("Thrown value: {}", fmt_js_value(cx, value.handle())),
+                filename: String::new(),
+                lineno: 0,
+                column: 0
+            }
+        }
+    };
+
+    println!("Uncaught exception at {}:{}:{} - {}",
+             error_info.filename,
+             error_info.lineno,
+             error_info.column,
+             error_info.message);
 }
